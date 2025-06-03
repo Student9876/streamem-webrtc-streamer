@@ -1,14 +1,16 @@
-import { desktopCapturer } from "electron";
-
-// Use a require statement instead of ES import for Electron
+// Import required modules
 const electron = require('electron');
-const { app, BrowserWindow, session } = electron;
+const { app, BrowserWindow, session, ipcMain } = electron;
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, fork } = require('child_process');
 const fs = require('fs');
+const { desktopCapturer } = require('electron');
 
-let mainWindow = null;
-let serverProcess: { on: (arg0: string, arg1: { (err: any): void; (code: any): void; }) => void; kill: () => void; } | null = null;
+let mainWindow: { webContents: { on: (event: string, listener: (...args: any[]) => void) => void; openDevTools: () => void; executeJavaScript: (arg0: string) => Promise<any>; }; loadFile: (arg0: any) => void; on: (arg0: string, arg1: () => void) => void; } | null = null;
+import { ChildProcess, ChildProcessWithoutNullStreams } from 'child_process';
+
+let serverProcess: ChildProcess | null = null;
+let serverPort = 3000; // Default port, will be updated
 
 function createWindow() {
     // Log the preload path to debug
@@ -60,70 +62,106 @@ function createWindow() {
     });
 
     // Add this to see if preload is loading
-    mainWindow.webContents.on('did-finish-load', () => {
-        console.log('✅ Window finished loading');
-    });
+    if (mainWindow) {
+        mainWindow.webContents.on('did-finish-load', () => {
+            console.log('✅ Window finished loading');
+        });
 
-    mainWindow.webContents.on('preload-error', (event: any, preloadPath: any, error: any) => {
-        console.error('❌ Preload error:', error);
-    });
+        mainWindow.webContents.on('preload-error', (event: any, preloadPath: any, error: any) => {
+            console.error('❌ Preload error:', error);
+        });
+    }
 
     // In production, load from local file
     const indexPath = path.join(__dirname, "..", "client", "dist", "index.html");
     console.log('🌐 Loading HTML from:', indexPath);
     console.log('🌐 HTML exists:', fs.existsSync(indexPath));
 
-    mainWindow.loadFile(indexPath);
+    if (mainWindow) {
+        mainWindow.loadFile(indexPath);
+    }
 
-    // Open DevTools for debugging (remove in production)
-    mainWindow.webContents.openDevTools();
+    // Disable DevTools in production
+    if (!app.isPackaged && mainWindow) {
+        mainWindow.webContents.openDevTools();
+    }
 
-    mainWindow.on("closed", () => {
-        mainWindow = null;
-    });
-}
+    // Expose the server port to the renderer process
+    if (mainWindow) {
+        mainWindow.webContents.on('did-finish-load', () => {
+            mainWindow!.webContents.executeJavaScript(`window.SERVER_PORT = ${serverPort};`)
+                .catch(err => console.error('Failed to set server port:', err));
+        });
+    }
 
-function startServer() {
-    const isPackaged = app.isPackaged;
-    const serverDir = isPackaged
-        ? path.join(process.resourcesPath, 'server')
-        : path.join(__dirname, '..', '..', 'server');
-
-    const entry = isPackaged
-        ? path.join(serverDir, 'dist', 'index.js')
-        : path.join(serverDir, 'src', 'index.ts');
-
-    console.log("📁 Server dir:", serverDir);
-    console.log("📄 Entry:", entry);
-
-    try {
-        serverProcess = isPackaged
-            ? spawn('node', [entry], {
-                cwd: serverDir,
-                stdio: 'inherit',
-                shell: true
-            })
-            : spawn('npx', ['ts-node', entry], {
-                cwd: serverDir,
-                stdio: 'inherit',
-                shell: true
-            });
-
-        if (serverProcess) {
-            serverProcess.on('error', (err) => {
-                console.error("🚨 Server error:", err);
-            });
-
-            serverProcess.on('exit', (code) => {
-                console.warn("⚠️ Server exited with code:", code);
-            });
-        }
-    } catch (err) {
-        console.error("🔥 Failed to start server:", err);
+    if (mainWindow) {
+        mainWindow.on("closed", () => {
+            mainWindow = null;
+        });
     }
 }
 
+function findNodeExecutable() {
+    // Try to find Node.js executable
+    const possiblePaths = [
+        process.execPath, // Current Node.js executable
+        'node',
+        path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'),
+        path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'nodejs', 'node.exe'),
+        path.join(process.env.APPDATA || '', 'npm', 'node.exe'),
+    ];
 
+    for (const nodePath of possiblePaths) {
+        try {
+            if (fs.existsSync(nodePath)) {
+                return nodePath;
+            }
+        } catch (e) {
+            // Continue to next path
+        }
+    }
+
+    return 'node'; // Fallback
+}
+
+function findTsNodePath() {
+    // Try to find ts-node executable
+    const possiblePaths = [
+        path.join(__dirname, '..', '..', 'node_modules', '.bin', 'ts-node'),
+        path.join(__dirname, '..', '..', 'node_modules', '.bin', 'ts-node.cmd'),
+        path.join(process.cwd(), 'node_modules', '.bin', 'ts-node'),
+        path.join(process.cwd(), 'node_modules', '.bin', 'ts-node.cmd'),
+    ];
+
+    for (const tsNodePath of possiblePaths) {
+        if (fs.existsSync(tsNodePath)) {
+            return tsNodePath;
+        }
+    }
+
+    return null;
+}
+
+function startServer() {
+    const serverPath = path.join(__dirname, '..', 'server', 'dist', 'index.js');
+
+    if (!fs.existsSync(serverPath)) {
+        console.error('Server file not found at:', serverPath);
+        return;
+    }
+
+    serverProcess = fork(serverPath, [], {
+        stdio: ['inherit', 'inherit', 'inherit', 'ipc']
+    });
+
+    if (serverProcess) {
+        serverProcess.on('error', console.error);
+        serverProcess.on('exit', (code) => console.log('Server exit:', code));
+    }
+}
+
+// Add a flag to track intentional quit
+app.isQuitting = false;
 
 app.whenReady().then(() => {
     startServer();
@@ -132,6 +170,10 @@ app.whenReady().then(() => {
     app.on("activate", () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+});
+
+app.on("before-quit", () => {
+    app.isQuitting = true;
 });
 
 app.on("window-all-closed", () => {

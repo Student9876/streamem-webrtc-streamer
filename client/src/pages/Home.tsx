@@ -1,15 +1,7 @@
-import {useEffect} from "react";
 import {useNavigate} from "react-router-dom";
 
 export default function Home() {
 	const navigate = useNavigate();
-
-	useEffect(() => {
-		console.log("Window electronAPI:", window.electronAPI);
-		if (!window.electronAPI) {
-			console.error("electronAPI not available!");
-		}
-	}, []);
 
 	return (
 		<div className="flex flex-col items-center justify-center h-screen gap-6 bg-gray-900 text-white">
