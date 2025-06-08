@@ -438,7 +438,16 @@ export default function Host() {
 				socket.on("answer", async ({sender, answer}) => {
 					const pc = peerConnections.current[sender];
 					if (pc) {
-						await pc.setRemoteDescription(new RTCSessionDescription(answer));
+						if (pc.signalingState === "stable") {
+							console.warn(`⚠️ Peer ${sender} is already stable. Skipping duplicate answer.`);
+							return;
+						}
+
+						try {
+							await pc.setRemoteDescription(new RTCSessionDescription(answer));
+						} catch (err) {
+							console.error(`❌ Error setting remote description for ${sender}:`, err);
+						}
 					}
 				});
 

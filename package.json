@@ -262,15 +262,25 @@
 	"build": {
 		"appId": "com.yourapp.streamem",
 		"productName": "StreamEM",
+		"directories": {
+			"output": "release"
+		},
 		"extraResources": [
 			{
 				"from": "server/dist",
 				"to": "server/dist"
 			}
 		],
+		"extraFiles": [
+			{
+				"from": "dist/server/dist",
+				"to": "server/dist"
+			}
+		],
 		"files": [
 			"dist/electron/**/*",
 			"dist/client/**/*",
+			"dist/server/**/*",
 			"!**/node_modules/**/*"
 		]
 	}
